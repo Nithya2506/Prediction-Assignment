@@ -1,0 +1,146 @@
+---
+title: "Prediction Assignment"
+author: "Nithya Kalyani"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview of Data Set
+
+This report is based on the Weight Lifting Exercises dataset which contains data about "how (well)" an exercising activity was performed by the person wearing the device.
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+The goal is to predict the manner in which the subjects did the exercise. This is the "classe" variable in the training set. Our outcome "classe" is a five level factor variable. 
+
+```{r load dataset,echo=FALSE}
+library(caret)
+```
+```{r outcome}
+#Load training data
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+#Variable to be predicted
+table(training$classe)
+```
+
+## Creation of Training & Validation Data sets
+
+The given training dataset has been split 70% into training and 30% into validation sets. This training set will be used for building the model and applied on the validation set to arrive at the out of sample error estimate.  
+
+```{r splitting dataset}
+#Split training data into training and validation sets
+inbuild <- createDataPartition(training$classe,p=0.7,list=FALSE)
+validationset <- training[-inbuild,]
+trainset <- training[inbuild,]
+```
+
+## Selection of Predictors
+
+The dataset contains 159 variables excluding 'classe' which we want to predict. The variables with missing values have been removed, variables with blank values have also been removed. Also, the variables containing user names, time data and serial numbers have also been excluded.   
+
+```{r variable selection}
+#Remove variables with missing values
+nas <- apply(trainset,2,function(x) sum(is.na(x)))
+cols <- names(trainset[,nas==0])
+trsub <- trainset[,cols]
+#Remove character variables
+cla <- sapply(trsub,class)
+traindf <- trsub[,cla!="character"]
+traindf <- traindf[,-c(1:4)]
+```
+
+Thus, we have 52 predictor variables after excluding the blank, missing and unnecessary variables in the above steps. 
+
+```{r final predictors}
+#Final training data set
+trset <- cbind(traindf,classe = trsub$classe)
+```
+
+## Model Selection
+
+On checking how correlated the predictors of the dataset are, the below result shows that - 40 out of 52 variables are more than 80% correlated. 
+
+```{r correlation}
+#Check correlation of predictors
+predictors <- trset[,-53]
+M <- abs(cor(predictors))
+diag(M) <- 0
+length(which(M>0.8))
+```
+
+As the predictors are highly correlated, random forest model is chosen for predicting this classification problem. 
+
+## Building Model
+
+```{r abc,echo=FALSE}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+
+Before building the random forest model, the tuning parameter, no. of predictors 'm' to be randomly chosen by the model while building each tree is set equal to square root of no. of predictors. Cross validation has been used with the default number of folds, i.e 10.  Also, to reduce the computation time, parallel processing has been enabled.
+
+Various values of 'number of predictors (m)' have been specified for tuning the model.
+
+```{r model fit}
+#Fitting model
+set.seed(3443)
+mtry <- sqrt(ncol(trset))
+tunegrid <- expand.grid(.mtry=c(2,4,mtry,mtry+1,mtry+2))
+fitcontrol <- trainControl(method = "cv",allowParallel = TRUE)
+fit_rf <- train(classe~.,method="rf",data=trset,
+                trControl = fitcontrol,tuneGrid=tunegrid)
+```
+
+```{r cba,echo=FALSE}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+## Applying Model on Validation Set
+
+The random forest model is applied on the validation set to check how well it predicts on a dataset other than the data set using which it was built. 
+
+```{r validation}
+#Predict on the validation set using the fit model
+columns <- names(trset)
+vset <- validationset[,columns]
+pred_rf <- predict(fit_rf,vset)
+```
+
+## Results of Prediction on Validation Set
+
+Below summary of the random forest model, shows the number of predictors for which the model produces highest accuracy.  
+
+```{r model}
+print(fit_rf)
+```
+
+### Comparison of Predicted and Actual Values in Validation Set
+
+```{r plot1,echo=FALSE}
+dat <- data.frame(table(vset$classe,pred_rf))
+names(dat) <- c("Actual","Predicted","Count")
+ggplot(data = dat,aes(x=Actual,y=Count,fill=Predicted))+geom_bar(stat = "identity",position = "dodge")+labs(title = "Comparison of Actual & Predicted values of 'classe' variable in Validation set",x = "Actual Classification 'classe'",y="No. of observations")
+```
+
+### Accuracy Estimate of Model
+
+The model has a very high overall accuracy as well as class accuracy, as seen from below output. 
+
+```{r accuracy}
+#Accuracy achieved by the model
+confusionMatrix(pred_rf,as.factor(vset$classe))
+```
+
+### Error Estimate of The Model
+
+The below plot shows that the random forest model achieves an error rate  of less than 0.05.
+
+```{r plot2,echo=FALSE}
+plot(fit_rf$finalModel)
+```
+
